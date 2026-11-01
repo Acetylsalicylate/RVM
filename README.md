@@ -40,3 +40,7 @@ let code = r#"
 ```bash
 cargo run
 ```
+
+## 🤝 Contributing
+Please note that this repository is maintained solely as an educational and portfolio project. **Pull requests are not being reviewed or accepted.**
+You still can fork project or make an issue.
