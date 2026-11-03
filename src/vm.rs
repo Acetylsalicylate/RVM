@@ -34,7 +34,7 @@ impl RVM {
 
             // 2. Decode & Execute
             match (opcode & 0xF000) >> 12 {
-                0x00 => {
+                0x0 => {
                     match (opcode & 0xFF00) >> 8 {
                         0x00 => { // HALT
                             self.running = false;
@@ -54,24 +54,75 @@ impl RVM {
                                 io::stdout().flush().unwrap();
                             }
                         }
+                        0x04 => { // PRINT_REG_NUM (число из регистра)
+                            let reg = (opcode & 0xFF) as usize;
+                            if reg < 16 {
+                                print!("{}", self.registres[reg]);
+                                io::stdout().flush().unwrap();
+                            }
+                        }
+                        0x05 => { // PRINT_IMM_NUM (число напрямую)
+                            let val = (opcode & 0xFF) as u8;
+                            print!("{}", val);
+                            io::stdout().flush().unwrap();
+                        }
                         _ => {
                             println!("\n[Err] Unknown opcode: {:#06X} at IP: {}", opcode, self.ip - 2);
                             self.running = false;
                         }
                     }
                 }
-                0x06 => { 
+                0x6 => { 
                     // MOV reg, imm
                     let x = ((opcode & 0x0F00) >> 8) as usize;
                     let kk = (opcode & 0x00FF) as u8;
                     self.registres[x] = kk;
                 }
-                0x07 => { 
+                0x7 => { 
                     // ADD reg, imm
                     let x = ((opcode & 0x0F00) >> 8) as usize;
                     let kk = (opcode & 0x00FF) as u8;
                     self.registres[x] = self.registres[x].wrapping_add(kk);
                 }
+                0x8 => { 
+                    // DIV reg, imm
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let kk = (opcode & 0x00FF) as u8;
+                    self.registres[x] = self.registres[x].wrapping_div(kk);
+                }
+                0x9 => { 
+                    // MUL reg, imm
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let kk = (opcode & 0x00FF) as u8;
+                    self.registres[x] = self.registres[x].wrapping_mul(kk);
+                }
+                0xA => { 
+                    // SUB reg, imm
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let kk = (opcode & 0x00FF) as u8;
+                    self.registres[x] = self.registres[x].wrapping_sub(kk);
+                }
+                0xB => {
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let mut input = String::new();
+                    print!("Enter value for V{}: ", x);
+                    io::stdout().flush().unwrap();
+                    
+                    if io::stdin().read_line(&mut input).is_ok() {
+                        self.registres[x] = match input.trim().parse() {
+                            Ok(num) => num,
+                            Err(_) => {
+                                println!("\n[Err] Invalid input. Expected number 0-255.");
+                                self.running = false;
+                                0
+                            }
+                        };
+                    } else {
+                        println!("\n[Err] Failed to read input.");
+                        self.running = false;
+                    }
+                }
+                
                 _ => {
                     println!("\n[Err] Unknown opcode: {} at IP: {}", opcode, self.ip - 2);
                     self.running = false;

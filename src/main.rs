@@ -5,10 +5,15 @@ use vm::RVM;
 use asm::Asm;
 
 fn main() {
-    let code = r#"
-        mov V0, 72
-        out V0
-        out "ello World!"
+    let code =
+        r#"
+        out "Enter a number: "
+        in V0
+        
+        mov V1, 10
+        add V0, 10
+        outn V0
+        out 10
     "#;
 
     let mut vm = RVM::new([0; 16]);
