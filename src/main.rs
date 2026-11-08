@@ -7,13 +7,10 @@ use asm::Asm;
 fn main() {
     let code =
         r#"
-        out "Enter a number: "
-        in V0
-        
-        mov V1, 10
-        add V0, 10
+        mov V0, 5
+        mov V1, 3
+        add V0, V1
         outn V0
-        out 10
     "#;
 
     let mut vm = RVM::new([0; 16]);

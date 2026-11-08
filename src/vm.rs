@@ -72,6 +72,41 @@ impl RVM {
                         }
                     }
                 }
+                0x1 => { 
+                    // MOV reg, reg
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let y = ((opcode & 0x00F0) >> 4) as usize;
+                    self.registres[x] = self.registres[y];
+                }
+                0x2 => { 
+                    // ADD reg, reg
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let y = ((opcode & 0x00F0) >> 4) as usize;
+                    self.registres[x] = self.registres[x].wrapping_add(self.registres[y]);
+                }
+                0x3 => { 
+                    // DIV reg, reg
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let y = ((opcode & 0x00F0) >> 4) as usize;
+                    if self.registres[y] == 0 {
+                        println!("\n[Err] Division by zero at IP: {}", self.ip - 2);
+                        self.running = false;
+                    } else {
+                        self.registres[x] = self.registres[x].wrapping_div(self.registres[y]);
+                    }
+                }
+                0x4 => { 
+                    // MUL reg, reg
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let y = ((opcode & 0x00F0) >> 4) as usize;
+                    self.registres[x] = self.registres[x].wrapping_mul(self.registres[y]);
+                }
+                0x5 => { 
+                    // SUB reg, reg
+                    let x = ((opcode & 0x0F00) >> 8) as usize;
+                    let y = ((opcode & 0x00F0) >> 4) as usize;
+                    self.registres[x] = self.registres[x].wrapping_sub(self.registres[y]);
+                }
                 0x6 => { 
                     // MOV reg, imm
                     let x = ((opcode & 0x0F00) >> 8) as usize;
@@ -105,7 +140,6 @@ impl RVM {
                 0xB => {
                     let x = ((opcode & 0x0F00) >> 8) as usize;
                     let mut input = String::new();
-                    print!("Enter value for V{}: ", x);
                     io::stdout().flush().unwrap();
                     
                     if io::stdin().read_line(&mut input).is_ok() {
