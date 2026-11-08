@@ -5,12 +5,17 @@ use vm::RVM;
 use asm::Asm;
 
 fn main() {
-    let code =
-        r#"
-        mov V0, 5
-        mov V1, 3
-        add V0, V1
+    let code = r#"
+        mov V0, 1
+
+    loop:
         outn V0
+        nl
+        add V0, 1
+        cmp V0, 6
+        jnz loop
+
+        halt
     "#;
 
     let mut vm = RVM::new([0; 16]);
