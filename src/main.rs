@@ -10,9 +10,9 @@ fn main() {
 
     loop:
         outn V0
-        nl
+        out "\r"
         add V0, 1
-        cmp V0, 6
+        cmp V0, 100
         jnz loop
 
         halt

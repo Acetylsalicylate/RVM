@@ -44,7 +44,8 @@ impl Asm {
 
             if instr == "out" && rest.starts_with('"') && rest.ends_with('"') {
                 let content = &rest[1..rest.len() - 1];
-                current_addr += content.chars().count() * 2;
+                let unescaped_len = unescape(content).len();
+                current_addr += unescaped_len * 2;
             } else {
                 current_addr += 2;
             }
@@ -86,7 +87,8 @@ impl Asm {
                 "out" => {
                     if rest.starts_with('"') && rest.ends_with('"') {
                         let content = &rest[1..rest.len() - 1];
-                        for c in content.chars() {
+                        let unescaped = unescape(content);
+                        for c in unescaped {
                             vpush_u16(&mut program_bytes, 0x01, c as u8);
                         }
                     } else if let Ok(val) = rest.parse::<u8>() {
@@ -224,4 +226,30 @@ impl Asm {
 fn vpush_u16(vec: &mut Vec<u8>, high: u8, low: u8) {
     vec.push(high);
     vec.push(low);
+}
+
+fn unescape(s: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => bytes.push(b'\n'),
+                Some('r') => bytes.push(b'\r'),
+                Some('t') => bytes.push(b'\t'), // tab
+                Some('\\') => bytes.push(b'\\'),
+                Some('"') => bytes.push(b'"'),
+                Some(other) => {
+                    bytes.push(b'\\');
+                    bytes.push(other as u8);
+                }
+                None => bytes.push(b'\\'),
+            }
+        } else {
+            bytes.push(c as u8);
+        }
+    }
+
+    bytes
 }
