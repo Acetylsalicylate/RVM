@@ -8,7 +8,7 @@ impl Asm {
         let mut labels = HashMap::new();
         let mut program_bytes = Vec::new();
 
-        // ------------------ collect labels ------------------
+        // ------------------ 1. Сбор меток (инструкция = 4 байта) ------------------
         let mut current_addr = base_offset;
         for raw_line in code.lines() {
             let line = raw_line.trim();
@@ -16,7 +16,6 @@ impl Asm {
                 continue;
             }
 
-            // check if label
             let (label, rest_line) = if let Some(colon_pos) = line.find(':') {
                 if !line.starts_with("out") {
                     (Some(line[..colon_pos].trim()), line[colon_pos + 1..].trim())
@@ -37,7 +36,6 @@ impl Asm {
                 continue;
             }
 
-            // instruct size
             let mut parts = rest_line.splitn(2, |c: char| c.is_whitespace());
             let instr = parts.next().unwrap_or("").trim();
             let rest = parts.next().unwrap_or("").trim();
@@ -45,20 +43,19 @@ impl Asm {
             if instr == "out" && rest.starts_with('"') && rest.ends_with('"') {
                 let content = &rest[1..rest.len() - 1];
                 let unescaped_len = unescape(content).len();
-                current_addr += unescaped_len * 2;
+                current_addr += unescaped_len * 4;
             } else {
-                current_addr += 2;
+                current_addr += 4;
             }
         }
 
-        // ------------------ bytecode gen ------------------
+        // ------------------ 2. Генерация байт-кода ------------------
         for raw_line in code.lines() {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with(';') {
                 continue;
             }
 
-            // cut label if in string
             let line = if let Some(colon_pos) = line.find(':') {
                 if !line.starts_with("out") {
                     line[colon_pos + 1..].trim()
@@ -79,143 +76,90 @@ impl Asm {
 
             match instr {
                 "halt" => {
-                    vpush_u16(&mut program_bytes, 0x00, 0x00);
+                    vpush_u32(&mut program_bytes, encode(0x0, 0x0, 0, 0, 0));
                 }
                 "nl" => {
-                    vpush_u16(&mut program_bytes, 0x02, 0x00);
+                    vpush_u32(&mut program_bytes, encode(0x0, 0x1, 0, 0, 0));
                 }
                 "out" => {
                     if rest.starts_with('"') && rest.ends_with('"') {
                         let content = &rest[1..rest.len() - 1];
-                        let unescaped = unescape(content);
-                        for c in unescaped {
-                            vpush_u16(&mut program_bytes, 0x01, c as u8);
+                        for c in unescape(content) {
+                            vpush_u32(&mut program_bytes, encode(0x0, 0x2, 0, 0, c as u32));
                         }
-                    } else if let Ok(val) = rest.parse::<u8>() {
-                        vpush_u16(&mut program_bytes, 0x05, val);
-                    } else if rest.starts_with('V') || rest.starts_with('v') {
-                        let reg: u8 = rest[1..].parse().map_err(|_| "Invalid register number")?;
-                        if reg >= 16 {
-                            return Err("Register index out of range (0-15)".to_string());
-                        }
-                        vpush_u16(&mut program_bytes, 0x03, reg);
+                    } else if let Ok(val) = rest.parse::<u16>() {
+                        vpush_u32(&mut program_bytes, encode(0x0, 0x5, 0, 0, val as u32));
                     } else {
-                        return Err(format!("Invalid out syntax: '{}'", line));
+                        let reg = parse_reg(rest)?;
+                        vpush_u32(&mut program_bytes, encode(0x0, 0x3, reg, 0, 0));
                     }
                 }
                 "outn" => {
-                    if rest.starts_with('V') || rest.starts_with('v') {
-                        let reg: u8 = rest[1..].parse().map_err(|_| "Invalid register number")?;
-                        if reg >= 16 {
-                            return Err("Register index out of range (0-15)".to_string());
-                        }
-                        vpush_u16(&mut program_bytes, 0x04, reg);
-                    } else {
-                        return Err(format!("Invalid outn syntax: '{}'", line));
-                    }
+                    let reg = parse_reg(rest)?;
+                    vpush_u32(&mut program_bytes, encode(0x0, 0x4, reg, 0, 0));
                 }
                 "in" => {
-                    if rest.starts_with('V') || rest.starts_with('v') {
-                        let reg: u8 = rest[1..].parse().map_err(|_| "Invalid register number")?;
-                        if reg >= 16 {
-                            return Err("Register index out of range (0-15)".to_string());
-                        }
-                        let opcode: u16 = 0xB000 | ((reg as u16) << 8);
-                        vpush_u16(&mut program_bytes, (opcode >> 8) as u8, (opcode & 0xFF) as u8);
-                    } else {
-                        return Err(format!("Invalid in syntax: '{}'", line));
-                    }
+                    let reg = parse_reg(rest)?;
+                    vpush_u32(&mut program_bytes, encode(0x0, 0x6, reg, 0, 0));
                 }
                 "mov" | "add" | "sub" | "mul" | "div" => {
-                    let operands: Vec<&str> = rest.split(',').map(|s| s.trim()).collect();
-                    if operands.len() == 2 && (operands[0].starts_with('V') || operands[0].starts_with('v')) {
-                        let reg1: usize = operands[0][1..].parse().map_err(|_| "Invalid register")?;
-                        if reg1 >= 16 {
-                            return Err("Register index out of range (0-15)".to_string());
-                        }
+                    let subop = match instr {
+                        "mov" => 0x0,
+                        "add" => 0x1,
+                        "sub" => 0x2,
+                        "mul" => 0x3,
+                        "div" => 0x4,
+                        _ => unreachable!(),
+                    };
 
-                        if operands[1].starts_with('V') || operands[1].starts_with('v') {
-                            let reg2: usize = operands[1][1..].parse().map_err(|_| "Invalid register")?;
-                            if reg2 >= 16 {
-                                return Err("Register index out of range (0-15)".to_string());
-                            }
-                            let opcode_base = match instr {
-                                "mov" => 0x1000,
-                                "add" => 0x2000,
-                                "div" => 0x3000,
-                                "mul" => 0x4000,
-                                "sub" => 0x5000,
-                                _ => unreachable!(),
-                            };
-                            let opcode: u16 = opcode_base | ((reg1 as u16) << 8) | ((reg2 as u16) << 4);
-                            vpush_u16(&mut program_bytes, (opcode >> 8) as u8, (opcode & 0xFF) as u8);
-                        } else {
-                            let val: u8 = operands[1].parse().map_err(|_| "Invalid immediate value")?;
-                            let opcode_base = match instr {
-                                "mov" => 0x6000,
-                                "add" => 0x7000,
-                                "div" => 0x8000,
-                                "mul" => 0x9000,
-                                "sub" => 0xA000,
-                                _ => unreachable!(),
-                            };
-                            let opcode: u16 = opcode_base | ((reg1 as u16) << 8) | (val as u16);
-                            vpush_u16(&mut program_bytes, (opcode >> 8) as u8, (opcode & 0xFF) as u8);
-                        }
+                    let operands: Vec<&str> = rest.split(',').map(|s| s.trim()).collect();
+                    if operands.len() != 2 {
+                        return Err(format!("Invalid syntax for '{}': '{}'", instr, line));
+                    }
+
+                    let reg1 = parse_reg(operands[0])?;
+                    if is_reg(operands[1]) {
+                        let reg2 = parse_reg(operands[1])?;
+                        vpush_u32(&mut program_bytes, encode(0x1, subop, reg1, reg2, 0));
                     } else {
-                        return Err(format!("Invalid {} syntax: '{}'", instr, line));
+                        let val: u16 = operands[1].parse().map_err(|_| "Invalid immediate (0-65535)")?;
+                        vpush_u32(&mut program_bytes, encode(0x2, subop, reg1, 0, val as u32));
                     }
                 }
                 "cmp" => {
                     let operands: Vec<&str> = rest.split(',').map(|s| s.trim()).collect();
-                    if operands.len() == 2 && (operands[0].starts_with('V') || operands[0].starts_with('v')) {
-                        let reg1: usize = operands[0][1..].parse().map_err(|_| "Invalid register")?;
-                        if reg1 >= 16 {
-                            return Err("Register index out of range (0-15)".to_string());
-                        }
-
-                        if operands[1].starts_with('V') || operands[1].starts_with('v') {
-                            let reg2: usize = operands[1][1..].parse().map_err(|_| "Invalid register")?;
-                            if reg2 >= 16 {
-                                return Err("Register index out of range (0-15)".to_string());
-                            }
-                            // 0x06XY
-                            vpush_u16(&mut program_bytes, 0x06, ((reg1 as u8) << 4) | (reg2 as u8));
-                        } else {
-                            let val: u8 = operands[1].parse().map_err(|_| "Invalid immediate value")?;
-                            let opcode: u16 = 0xF000 | ((reg1 as u16) << 8) | (val as u16);
-                            vpush_u16(&mut program_bytes, (opcode >> 8) as u8, (opcode & 0xFF) as u8);
-                        }
-                    } else {
+                    if operands.len() != 2 {
                         return Err(format!("Invalid cmp syntax: '{}'", line));
+                    }
+
+                    let reg1 = parse_reg(operands[0])?;
+                    if is_reg(operands[1]) {
+                        let reg2 = parse_reg(operands[1])?;
+                        vpush_u32(&mut program_bytes, encode(0x1, 0x5, reg1, reg2, 0));
+                    } else {
+                        let val: u16 = operands[1].parse().map_err(|_| "Invalid immediate (0-65535)")?;
+                        vpush_u32(&mut program_bytes, encode(0x2, 0x5, reg1, 0, val as u32));
                     }
                 }
                 "jmp" | "jz" | "je" | "jnz" | "jne" => {
+                    let subop = match instr {
+                        "jmp" => 0x0,
+                        "jz" | "je" => 0x1,
+                        "jnz" | "jne" => 0x2,
+                        _ => unreachable!(),
+                    };
+
                     let target = if let Some(&addr) = labels.get(rest) {
                         addr
                     } else if let Ok(addr) = rest.parse::<u16>() {
                         addr
                     } else {
-                        return Err(format!("Unknown label or invalid address '{}' in: '{}'", rest, line));
+                        return Err(format!("Unknown label or address '{}' in: '{}'", rest, line));
                     };
 
-                    if target >= 4096 {
-                        return Err(format!("Jump target address out of bounds (0-4095): {}", target));
-                    }
-
-                    let prefix = match instr {
-                        "jmp" => 0xC000,
-                        "jz" | "je" => 0xD000,
-                        "jnz" | "jne" => 0xE000,
-                        _ => unreachable!(),
-                    };
-
-                    let opcode: u16 = prefix | (target & 0x0FFF);
-                    vpush_u16(&mut program_bytes, (opcode >> 8) as u8, (opcode & 0xFF) as u8);
+                    vpush_u32(&mut program_bytes, encode(0x3, subop, 0, 0, target as u32));
                 }
-                _ => {
-                    return Err(format!("Unknown instruction: '{}'", line));
-                }
+                _ => return Err(format!("Unknown instruction: '{}'", line)),
             }
         }
 
@@ -223,9 +167,35 @@ impl Asm {
     }
 }
 
-fn vpush_u16(vec: &mut Vec<u8>, high: u8, low: u8) {
-    vec.push(high);
-    vec.push(low);
+// Упаковщик 32-битной инструкции
+fn encode(group: u32, subop: u32, r1: u32, r2: u32, imm: u32) -> u32 {
+    ((group & 0x0F) << 28)
+        | ((subop & 0x0F) << 24)
+        | ((r1 & 0x0F) << 20)
+        | ((r2 & 0x0F) << 16)
+        | (imm & 0xFFFF)
+}
+
+fn vpush_u32(vec: &mut Vec<u8>, val: u32) {
+    vec.extend_from_slice(&val.to_be_bytes());
+}
+
+fn is_reg(s: &str) -> bool {
+    let s = s.trim();
+    (s.starts_with('V') || s.starts_with('v')) && s[1..].parse::<u8>().is_ok()
+}
+
+fn parse_reg(s: &str) -> Result<u32, String> {
+    let s = s.trim();
+    if is_reg(s) {
+        let reg: u32 = s[1..].parse().map_err(|_| "Invalid register number")?;
+        if reg >= 16 {
+            return Err("Register index out of range (0-15)".to_string());
+        }
+        Ok(reg)
+    } else {
+        Err(format!("Expected register (e.g. V0), got '{}'", s))
+    }
 }
 
 fn unescape(s: &str) -> Vec<u8> {
@@ -237,7 +207,7 @@ fn unescape(s: &str) -> Vec<u8> {
             match chars.next() {
                 Some('n') => bytes.push(b'\n'),
                 Some('r') => bytes.push(b'\r'),
-                Some('t') => bytes.push(b'\t'), // tab
+                Some('t') => bytes.push(b'\t'),
                 Some('\\') => bytes.push(b'\\'),
                 Some('"') => bytes.push(b'"'),
                 Some(other) => {

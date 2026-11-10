@@ -2,20 +2,20 @@
 use std::io::{self, Write};
 
 pub struct RVM {
-    memory: [u8; 4096],
+    memory: [u8; 65536],   // 64 Kb
     ip: usize,
     running: bool,
-    registres: [u8; 16],
-    zero_flag: bool, // <-- Флаг для условий
+    registers: [u64; 16],  
+    zero_flag: bool,
 }
 
 impl RVM {
-    pub fn new(regs: [u8; 16]) -> Self {
+    pub fn new(regs: [u64; 16]) -> Self {
         RVM {
-            memory: [0; 4096],
-            ip: 512, // 0x200
+            memory: [0; 65536],
+            ip: 0x200, // 512
             running: true,
-            registres: regs,
+            registers: regs,
             zero_flag: false,
         }
     }
@@ -30,164 +30,151 @@ impl RVM {
         println!("--- Start ---");
 
         while self.running {
-            // 1. Fetch
-            let opcode = ((self.memory[self.ip] as u16) << 8) | (self.memory[self.ip + 1] as u16);
-            self.ip += 2;
+            if self.ip + 4 > self.memory.len() {
+                println!("\n[Err] IP out of memory bounds: {}", self.ip);
+                break;
+            }
 
-            // 2. Decode & Execute
-            match (opcode & 0xF000) >> 12 {
-                0x0 => {
-                    match (opcode & 0xFF00) >> 8 {
-                        0x00 => { // HALT
+            // 1. Fetch (32-битная инструкция / 4 байта)
+            let opcode = u32::from_be_bytes([
+                self.memory[self.ip],
+                self.memory[self.ip + 1],
+                self.memory[self.ip + 2],
+                self.memory[self.ip + 3],
+            ]);
+            self.ip += 4;
+
+            // 2. Распаковка полей
+            let group  = ((opcode >> 28) & 0x0F) as u8;
+            let subop  = ((opcode >> 24) & 0x0F) as u8;
+            let r1     = ((opcode >> 20) & 0x0F) as usize;
+            let r2     = ((opcode >> 16) & 0x0F) as usize;
+            let imm    = (opcode & 0xFFFF) as u64;
+            let addr   = (opcode & 0xFFFF) as usize;
+
+            // 3. Decode & Execute
+            match group {
+                // 0x0: Системные и ввод/вывод
+                0x0 => match subop {
+                    0x0 => self.running = false, // halt
+                    0x1 => println!(),           // nl
+                    0x2 => {                     // out char (imm)
+                        print!("{}", (imm as u8) as char);
+                        io::stdout().flush().unwrap();
+                    }
+                    0x3 => {                     // out reg (char)
+                        print!("{}", (self.registers[r1] as u8) as char);
+                        io::stdout().flush().unwrap();
+                    }
+                    0x4 => {                     // outn reg (u64 число)
+                        print!("{}", self.registers[r1]);
+                        io::stdout().flush().unwrap();
+                    }
+                    0x5 => {                     // out imm (число)
+                        print!("{}", imm);
+                        io::stdout().flush().unwrap();
+                    }
+                    0x6 => {                     // in reg (64-битное число)
+                        let mut input = String::new();
+                        io::stdout().flush().unwrap();
+                        if io::stdin().read_line(&mut input).is_ok() {
+                            match input.trim().parse::<u64>() {
+                                Ok(num) => self.registers[r1] = num,
+                                Err(_) => {
+                                    println!("\n[Err] Expected 64-bit integer (0-{}).", u64::MAX);
+                                    self.running = false;
+                                }
+                            }
+                        } else {
+                            println!("\n[Err] Failed to read input.");
                             self.running = false;
                         }
-                        0x01 => { // PRINT_CHAR
-                            let char_code = (opcode & 0xFF) as u8;
-                            print!("{}", char_code as char);
-                            io::stdout().flush().unwrap();
-                        }
-                        0x02 => { // NEWLINE
-                            println!();
-                        }
-                        0x03 => { // PRINT_REG
-                            let reg = (opcode & 0xFF) as usize;
-                            if reg < 16 {
-                                print!("{}", self.registres[reg] as char);
-                                io::stdout().flush().unwrap();
-                            }
-                        }
-                        0x04 => { // PRINT_REG_NUM
-                            let reg = (opcode & 0xFF) as usize;
-                            if reg < 16 {
-                                print!("{}", self.registres[reg]);
-                                io::stdout().flush().unwrap();
-                            }
-                        }
-                        0x05 => { // PRINT_IMM_NUM
-                            let val = (opcode & 0xFF) as u8;
-                            print!("{}", val);
-                            io::stdout().flush().unwrap();
-                        }
-                        0x06 => { // CMP reg, reg (0x06XY)
-                            let x = ((opcode & 0x00F0) >> 4) as usize;
-                            let y = (opcode & 0x000F) as usize;
-                            self.zero_flag = self.registres[x] == self.registres[y];
-                        }
-                        _ => {
-                            println!("\n[Err] Unknown opcode: {:#06X} at IP: {}", opcode, self.ip - 2);
-                            self.running = false;
-                        }
                     }
-                }
-                0x1 => { // MOV reg, reg
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 4) as usize;
-                    self.registres[x] = self.registres[y];
-                }
-                0x2 => { // ADD reg, reg
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 4) as usize;
-                    self.registres[x] = self.registres[x].wrapping_add(self.registres[y]);
-                    self.zero_flag = self.registres[x] == 0;
-                }
-                0x3 => { // DIV reg, reg
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 4) as usize;
-                    if self.registres[y] == 0 {
-                        println!("\n[Err] Division by zero at IP: {}", self.ip - 2);
+                    _ => {
+                        println!("\n[Err] Unknown SYS subop: {:#02X} at IP: {}", subop, self.ip - 4);
                         self.running = false;
-                    } else {
-                        self.registres[x] = self.registres[x].wrapping_div(self.registres[y]);
-                        self.zero_flag = self.registres[x] == 0;
                     }
-                }
-                0x4 => { // MUL reg, reg
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 4) as usize;
-                    self.registres[x] = self.registres[x].wrapping_mul(self.registres[y]);
-                    self.zero_flag = self.registres[x] == 0;
-                }
-                0x5 => { // SUB reg, reg
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 4) as usize;
-                    self.registres[x] = self.registres[x].wrapping_sub(self.registres[y]);
-                    self.zero_flag = self.registres[x] == 0;
-                }
-                0x6 => { // MOV reg, imm
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let kk = (opcode & 0x00FF) as u8;
-                    self.registres[x] = kk;
-                }
-                0x7 => { // ADD reg, imm
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let kk = (opcode & 0x00FF) as u8;
-                    self.registres[x] = self.registres[x].wrapping_add(kk);
-                    self.zero_flag = self.registres[x] == 0;
-                }
-                0x8 => { // DIV reg, imm
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let kk = (opcode & 0x00FF) as u8;
-                    if kk == 0 {
-                        println!("\n[Err] Division by zero at IP: {}", self.ip - 2);
-                        self.running = false;
-                    } else {
-                        self.registres[x] = self.registres[x].wrapping_div(kk);
-                        self.zero_flag = self.registres[x] == 0;
-                    }
-                }
-                0x9 => { // MUL reg, imm
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let kk = (opcode & 0x00FF) as u8;
-                    self.registres[x] = self.registres[x].wrapping_mul(kk);
-                    self.zero_flag = self.registres[x] == 0;
-                }
-                0xA => { // SUB reg, imm
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let kk = (opcode & 0x00FF) as u8;
-                    self.registres[x] = self.registres[x].wrapping_sub(kk);
-                    self.zero_flag = self.registres[x] == 0;
-                }
-                0xB => { // IN reg
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let mut input = String::new();
-                    io::stdout().flush().unwrap();
+                },
 
-                    if io::stdin().read_line(&mut input).is_ok() {
-                        self.registres[x] = match input.trim().parse() {
-                            Ok(num) => num,
-                            Err(_) => {
-                                println!("\n[Err] Invalid input. Expected number 0-255.");
-                                self.running = false;
-                                0
-                            }
-                        };
-                    } else {
-                        println!("\n[Err] Failed to read input.");
+                // 0x1: АЛУ Регистр-Регистр (64 бита)
+                0x1 => match subop {
+                    0x0 => self.registers[r1] = self.registers[r2], // mov
+                    0x1 => {                                        // add
+                        self.registers[r1] = self.registers[r1].wrapping_add(self.registers[r2]);
+                        self.zero_flag = self.registers[r1] == 0;
+                    }
+                    0x2 => {                                        // sub
+                        self.registers[r1] = self.registers[r1].wrapping_sub(self.registers[r2]);
+                        self.zero_flag = self.registers[r1] == 0;
+                    }
+                    0x3 => {                                        // mul
+                        self.registers[r1] = self.registers[r1].wrapping_mul(self.registers[r2]);
+                        self.zero_flag = self.registers[r1] == 0;
+                    }
+                    0x4 => {                                        // div
+                        if self.registers[r2] == 0 {
+                            println!("\n[Err] Division by zero at IP: {}", self.ip - 4);
+                            self.running = false;
+                        } else {
+                            self.registers[r1] = self.registers[r1].wrapping_div(self.registers[r2]);
+                            self.zero_flag = self.registers[r1] == 0;
+                        }
+                    }
+                    0x5 => {                                        // cmp
+                        self.zero_flag = self.registers[r1] == self.registers[r2];
+                    }
+                    _ => {
+                        println!("\n[Err] Unknown ALU_RR subop: {:#02X} at IP: {}", subop, self.ip - 4);
                         self.running = false;
                     }
-                }
-                0xC => { // JMP imm12 
-                    self.ip = (opcode & 0x0FFF) as usize;
-                }
-                0xD => { // JZ imm12 
-                    let addr = (opcode & 0x0FFF) as usize;
-                    if self.zero_flag {
-                        self.ip = addr;
+                },
+
+                // 0x2: АЛУ Регистр-Константа (64 бита)
+                0x2 => match subop {
+                    0x0 => self.registers[r1] = imm,                // mov
+                    0x1 => {                                        // add
+                        self.registers[r1] = self.registers[r1].wrapping_add(imm);
+                        self.zero_flag = self.registers[r1] == 0;
                     }
-                }
-                0xE => { // JNZ imm12 
-                    let addr = (opcode & 0x0FFF) as usize;
-                    if !self.zero_flag {
-                        self.ip = addr;
+                    0x2 => {                                        // sub
+                        self.registers[r1] = self.registers[r1].wrapping_sub(imm);
+                        self.zero_flag = self.registers[r1] == 0;
                     }
-                }
-                0xF => { // CMP reg, imm 
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let kk = (opcode & 0x00FF) as u8;
-                    self.zero_flag = self.registres[x] == kk;
-                }
+                    0x3 => {                                        // mul
+                        self.registers[r1] = self.registers[r1].wrapping_mul(imm);
+                        self.zero_flag = self.registers[r1] == 0;
+                    }
+                    0x4 => {                                        // div
+                        if imm == 0 {
+                            println!("\n[Err] Division by zero at IP: {}", self.ip - 4);
+                            self.running = false;
+                        } else {
+                            self.registers[r1] = self.registers[r1].wrapping_div(imm);
+                            self.zero_flag = self.registers[r1] == 0;
+                        }
+                    }
+                    0x5 => {                                        // cmp
+                        self.zero_flag = self.registers[r1] == imm;
+                    }
+                    _ => {
+                        println!("\n[Err] Unknown ALU_RI subop: {:#02X} at IP: {}", subop, self.ip - 4);
+                        self.running = false;
+                    }
+                },
+
+                // 0x3: Переходы (Jumps)
+                0x3 => match subop {
+                    0x0 => self.ip = addr,                               // jmp
+                    0x1 => if self.zero_flag { self.ip = addr; },       // jz / je
+                    0x2 => if !self.zero_flag { self.ip = addr; },      // jnz / jne
+                    _ => {
+                        println!("\n[Err] Unknown JMP subop: {:#02X} at IP: {}", subop, self.ip - 4);
+                        self.running = false;
+                    }
+                },
+
                 _ => {
-                    println!("\n[Err] Unknown opcode: {:#06X} at IP: {}", opcode, self.ip - 2);
+                    println!("\n[Err] Unknown opcode: {:#010X} at IP: {}", opcode, self.ip - 4);
                     self.running = false;
                 }
             }
