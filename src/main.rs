@@ -6,7 +6,7 @@ use asm::Asm;
 use std::fs;
 
 fn main() {
-    let code = fs::read_to_string("main.asm").expect("Can't find file");
+    let code = fs::read_to_string("main.asm").expect("Can't find main.asm");
 
     let mut vm = RVM::new([0u64; 16]);
     let asm = Asm;
