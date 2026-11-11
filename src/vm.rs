@@ -2,10 +2,11 @@
 use std::io::{self, Write};
 
 pub struct RVM {
-    memory: [u8; 65536],   // 64 КБ памяти
-    ip: usize,
+    memory: [u8; 65536],   // 64 KB memory
+    ip: usize,             // Instruction pointer
+    sp: usize,             // Stack pointer
     running: bool,
-    registers: [u64; 16],  // 64-битные регистры
+    registers: [u64; 16],  // 64-bit general purpose registers
     zero_flag: bool,
 }
 
@@ -13,7 +14,8 @@ impl RVM {
     pub fn new(regs: [u64; 16]) -> Self {
         RVM {
             memory: [0; 65536],
-            ip: 0x200, // 512
+            ip: 0x200,      // Code segment begins at 512 (0x200)
+            sp: 65536,      // Stack grows downwards from the top of memory
             running: true,
             registers: regs,
             zero_flag: false,
@@ -35,7 +37,7 @@ impl RVM {
                 break;
             }
 
-            // Fetch (32 бита)
+            // Fetch (32-bit big-endian instruction)
             let opcode = u32::from_be_bytes([
                 self.memory[self.ip],
                 self.memory[self.ip + 1],
@@ -44,19 +46,19 @@ impl RVM {
             ]);
             self.ip += 4;
 
-            let group   = ((opcode >> 28) & 0x0F) as u8;
-            let subop   = ((opcode >> 24) & 0x0F) as u8;
-            let r1   = ((opcode >> 20) & 0x0F) as usize;
-            let r2   = ((opcode >> 16) & 0x0F) as usize;
-            let imm    = (opcode & 0xFFFF) as u64;
-            let addr = (opcode & 0xFFFF) as usize;
+            let group = ((opcode >> 28) & 0x0F) as u8;
+            let subop = ((opcode >> 24) & 0x0F) as u8;
+            let r1    = ((opcode >> 20) & 0x0F) as usize;
+            let r2    = ((opcode >> 16) & 0x0F) as usize;
+            let imm   = (opcode & 0xFFFF) as u64;
+            let addr  = (opcode & 0xFFFF) as usize;
 
             match group {
-                // 0x0: Системные и I/O
+                // 0x0: System & I/O
                 0x0 => match subop {
                     0x0 => self.running = false, // halt
                     0x1 => println!(),           // nl
-                    0x2 => {                     // out char
+                    0x2 => {                     // out char (imm)
                         print!("{}", (imm as u8) as char);
                         io::stdout().flush().unwrap();
                     }
@@ -90,7 +92,7 @@ impl RVM {
                     _ => self.running = false,
                 },
 
-                // 0x1: АЛУ Регистр-Регистр
+                // 0x1: ALU Register-Register
                 0x1 => match subop {
                     0x0 => self.registers[r1] = self.registers[r2],
                     0x1 => {
@@ -118,7 +120,7 @@ impl RVM {
                     _ => self.running = false,
                 },
 
-                // 0x2: АЛУ Регистр-Константа
+                // 0x2: ALU Register-Immediate
                 0x2 => match subop {
                     0x0 => self.registers[r1] = imm,
                     0x1 => {
@@ -146,7 +148,7 @@ impl RVM {
                     _ => self.running = false,
                 },
 
-                // 0x3: Переходы
+                // 0x3: Control Flow / Jumps
                 0x3 => match subop {
                     0x0 => self.ip = addr,
                     0x1 => if self.zero_flag { self.ip = addr; },
@@ -154,7 +156,7 @@ impl RVM {
                     _ => self.running = false,
                 },
 
-                // 0x4: Операции с памятью
+                // 0x4: Memory Operations
                 0x4 => match subop {
                     0x0 => { // loadb Vx, [Vy]
                         let a = self.registers[r2] as usize;
@@ -222,6 +224,73 @@ impl RVM {
                         } else {
                             println!("\n[Err] Out of bounds store at {:#X}", addr);
                             self.running = false;
+                        }
+                    }
+                    _ => self.running = false,
+                },
+
+                // 0x5: Stack & Subroutine Operations
+                0x5 => match subop {
+                    0x0 => { // push Vx (64-bit register)
+                        if self.sp < 8 {
+                            println!("\n[Err] Stack overflow on push");
+                            self.running = false;
+                        } else {
+                            self.sp -= 8;
+                            self.memory[self.sp..self.sp + 8].copy_from_slice(&self.registers[r1].to_be_bytes());
+                        }
+                    }
+                    0x1 => { // pop Vx (64-bit register)
+                        if self.sp + 8 > self.memory.len() {
+                            println!("\n[Err] Stack underflow on pop");
+                            self.running = false;
+                        } else {
+                            self.registers[r1] = u64::from_be_bytes(
+                                self.memory[self.sp..self.sp + 8].try_into().unwrap(),
+                            );
+                            self.sp += 8;
+                        }
+                    }
+                    0x2 => { // push imm (64-bit value)
+                        if self.sp < 8 {
+                            println!("\n[Err] Stack overflow on push");
+                            self.running = false;
+                        } else {
+                            self.sp -= 8;
+                            self.memory[self.sp..self.sp + 8].copy_from_slice(&imm.to_be_bytes());
+                        }
+                    }
+                    0x3 => { // call addr
+                        if self.sp < 8 {
+                            println!("\n[Err] Stack overflow on call");
+                            self.running = false;
+                        } else {
+                            self.sp -= 8;
+                            self.memory[self.sp..self.sp + 8].copy_from_slice(&(self.ip as u64).to_be_bytes());
+                            self.ip = addr;
+                        }
+                    }
+                    0x4 => { // ret
+                        if self.sp + 8 > self.memory.len() {
+                            println!("\n[Err] Stack underflow on ret");
+                            self.running = false;
+                        } else {
+                            let return_ip = u64::from_be_bytes(
+                                self.memory[self.sp..self.sp + 8].try_into().unwrap(),
+                            ) as usize;
+                            self.sp += 8;
+                            self.ip = return_ip;
+                        }
+                    }
+                    0x5 => { // call Vx (register indirect call)
+                        let target = self.registers[r1] as usize;
+                        if self.sp < 8 {
+                            println!("\n[Err] Stack overflow on call");
+                            self.running = false;
+                        } else {
+                            self.sp -= 8;
+                            self.memory[self.sp..self.sp + 8].copy_from_slice(&(self.ip as u64).to_be_bytes());
+                            self.ip = target;
                         }
                     }
                     _ => self.running = false,

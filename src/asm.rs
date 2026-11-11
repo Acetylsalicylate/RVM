@@ -13,10 +13,10 @@ impl Asm {
         let mut labels = HashMap::new();
         let mut program_bytes = Vec::new();
 
-        // ------------------ 1. Сбор меток ------------------
+        // ------------------ 1. First pass: collect labels ------------------
         let mut current_addr = base_offset;
         for raw_line in code.lines() {
-            // Отрезаем строчные комментарии и пробелы
+            // Strip comments and surrounding whitespace
             let line = strip_comment(raw_line).trim();
             if line.is_empty() {
                 continue;
@@ -45,11 +45,12 @@ impl Asm {
                 let content = &rest[1..rest.len() - 1];
                 current_addr += unescape(content).len() * 4;
             } else {
+                // All other instructions take 4 bytes (including push, pop, call, ret)
                 current_addr += 4;
             }
         }
 
-        // ------------------ 2. Генерация байт-кода ------------------
+        // ------------------ 2. Second pass: generate bytecode ------------------
         for raw_line in code.lines() {
             let line = strip_comment(raw_line).trim();
             if line.is_empty() {
@@ -189,6 +190,32 @@ impl Asm {
                         }
                     }
                 }
+                // ------------------ Stack Operations ------------------
+                "push" => {
+                    if is_reg(rest) {
+                        let reg = parse_reg(rest)?;
+                        vpush_u32(&mut program_bytes, encode(0x5, 0x0, reg, 0, 0));
+                    } else {
+                        let val = parse_imm_or_label(rest, &labels)?;
+                        vpush_u32(&mut program_bytes, encode(0x5, 0x2, 0, 0, val as u32));
+                    }
+                }
+                "pop" => {
+                    let reg = parse_reg(rest)?;
+                    vpush_u32(&mut program_bytes, encode(0x5, 0x1, reg, 0, 0));
+                }
+                "call" => {
+                    if is_reg(rest) {
+                        let reg = parse_reg(rest)?;
+                        vpush_u32(&mut program_bytes, encode(0x5, 0x5, reg, 0, 0));
+                    } else {
+                        let target = parse_imm_or_label(rest, &labels)?;
+                        vpush_u32(&mut program_bytes, encode(0x5, 0x3, 0, 0, target as u32));
+                    }
+                }
+                "ret" => {
+                    vpush_u32(&mut program_bytes, encode(0x5, 0x4, 0, 0, 0));
+                }
                 _ => return Err(format!("Unknown instruction: '{}'", line)),
             }
         }
@@ -197,7 +224,7 @@ impl Asm {
     }
 }
 
-// Удаление комментариев от ';' до конца строки (с учетом кавычек)
+// Strip line comments starting from ';' up to end of line (respecting quotes)
 fn strip_comment(line: &str) -> &str {
     let mut in_quotes = false;
     for (i, c) in line.char_indices() {
@@ -210,7 +237,7 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-// Отделение метки (учитывая, что двоеточие может быть внутри кавычек в строке)
+// Split label definition (respecting colons inside quotes)
 fn split_label(line: &str) -> (Option<&str>, &str) {
     let mut in_quotes = false;
     for (i, c) in line.char_indices() {
