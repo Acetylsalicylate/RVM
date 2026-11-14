@@ -194,9 +194,7 @@ buffer:
 cargo run --release
 ```
 
----
 
 ## 🤝 Contributing
 **Pull requests are not being reviewed or accepted.**
 You still can fork project or make an issue.
-```
