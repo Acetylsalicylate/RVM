@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "RVM"
+name = "rvm"
 version = "0.1.0"
