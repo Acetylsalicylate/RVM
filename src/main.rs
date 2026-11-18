@@ -3,10 +3,19 @@ mod asm;
 
 use vm::RVM;
 use asm::Asm;
-use std::fs;
+use std::{env, fs};
 
 fn main() {
-    let code = fs::read_to_string("main.asm").expect("Can't find main.asm");
+
+    let args: Vec<String> = env::args().collect();
+
+    let file_path = if args.len() > 1 {
+        &args[1]
+    } else {
+        "main.asm"
+    };
+
+    let code = fs::read_to_string(file_path).expect("Can't find main.asm");
 
     let mut vm = RVM::new([0u64; 16]);
     let asm = Asm;
