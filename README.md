@@ -190,9 +190,15 @@ buffer:
 
 1. Place your code in `main.asm` in the root of the project.
 2. Build and run using Cargo:
-```bash
-cargo run --release
-```
+    ```bash
+    cargo run --release
+    ```
+Or 
+1. Build:
+    ```bash
+    cargo build --release
+    ```
+2. Add RVM to PATH
 
 
 ## 🤝 Contributing
