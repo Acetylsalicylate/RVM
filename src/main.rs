@@ -29,4 +29,6 @@ fn main() {
             println!("Compile error: {}", e);
         }
     }
+    // vm.dump_memory_nonzero();
+    // vm.dump_memory(512, 1024);
 }

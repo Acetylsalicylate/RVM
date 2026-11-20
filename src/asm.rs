@@ -3,8 +3,8 @@ use std::collections::HashMap;
 pub struct Asm;
 
 enum AddrOp {
-    Reg(u32),
-    Imm(u16),
+    Reg(u64),
+    Imm(u64),
 }
 
 impl Asm {
@@ -26,7 +26,7 @@ impl Asm {
 
             if let Some(lbl) = label {
                 if !lbl.is_empty() {
-                    labels.insert(lbl.to_string(), current_addr as u16);
+                    labels.insert(lbl.to_string(), current_addr as u64);
                 }
             }
 
@@ -41,12 +41,13 @@ impl Asm {
             if instr == "db" {
                 let db_bytes = parse_db(rest)?;
                 current_addr += db_bytes.len();
-            } else if instr == "out" && rest.starts_with('"') && rest.ends_with('"') {
+            } else if instr == "out" && rest.starts_with('"') && rest.ends_with('"') && rest.len() >= 2 {
                 let content = &rest[1..rest.len() - 1];
-                current_addr += unescape(content).len() * 4;
+                // Each character expands into one 64-bit (8-byte) instruction
+                current_addr += unescape(content).len() * 8;
             } else {
-                // All other instructions take 4 bytes (including push, pop, call, ret)
-                current_addr += 4;
+                // Standard instruction size is 8 bytes (64-bit)
+                current_addr += 8;
             }
         }
 
@@ -72,31 +73,31 @@ impl Asm {
                     program_bytes.extend(db_bytes);
                 }
                 "halt" => {
-                    vpush_u32(&mut program_bytes, encode(0x0, 0x0, 0, 0, 0));
+                    vpush_u64(&mut program_bytes, encode(0x0, 0x0, 0, 0, 0));
                 }
                 "nl" => {
-                    vpush_u32(&mut program_bytes, encode(0x0, 0x1, 0, 0, 0));
+                    vpush_u64(&mut program_bytes, encode(0x0, 0x1, 0, 0, 0));
                 }
                 "out" => {
-                    if rest.starts_with('"') && rest.ends_with('"') {
+                    if rest.starts_with('"') && rest.ends_with('"') && rest.len() >= 2 {
                         let content = &rest[1..rest.len() - 1];
                         for c in unescape(content) {
-                            vpush_u32(&mut program_bytes, encode(0x0, 0x2, 0, 0, c as u32));
+                            vpush_u64(&mut program_bytes, encode(0x0, 0x2, 0, 0, c as u64));
                         }
                     } else if let Ok(reg) = parse_reg(rest) {
-                        vpush_u32(&mut program_bytes, encode(0x0, 0x3, reg, 0, 0));
+                        vpush_u64(&mut program_bytes, encode(0x0, 0x3, reg, 0, 0));
                     } else {
                         let val = parse_imm_or_label(rest, &labels)?;
-                        vpush_u32(&mut program_bytes, encode(0x0, 0x5, 0, 0, val as u32));
+                        vpush_u64(&mut program_bytes, encode(0x0, 0x5, 0, 0, val));
                     }
                 }
                 "outn" => {
                     let reg = parse_reg(rest)?;
-                    vpush_u32(&mut program_bytes, encode(0x0, 0x4, reg, 0, 0));
+                    vpush_u64(&mut program_bytes, encode(0x0, 0x4, reg, 0, 0));
                 }
                 "in" => {
                     let reg = parse_reg(rest)?;
-                    vpush_u32(&mut program_bytes, encode(0x0, 0x6, reg, 0, 0));
+                    vpush_u64(&mut program_bytes, encode(0x0, 0x6, reg, 0, 0));
                 }
                 "mov" | "add" | "sub" | "mul" | "div" => {
                     let subop = match instr {
@@ -116,10 +117,10 @@ impl Asm {
                     let reg1 = parse_reg(operands[0])?;
                     if is_reg(operands[1]) {
                         let reg2 = parse_reg(operands[1])?;
-                        vpush_u32(&mut program_bytes, encode(0x1, subop, reg1, reg2, 0));
+                        vpush_u64(&mut program_bytes, encode(0x1, subop, reg1, reg2, 0));
                     } else {
                         let val = parse_imm_or_label(operands[1], &labels)?;
-                        vpush_u32(&mut program_bytes, encode(0x2, subop, reg1, 0, val as u32));
+                        vpush_u64(&mut program_bytes, encode(0x2, subop, reg1, 0, val));
                     }
                 }
                 "cmp" => {
@@ -131,10 +132,10 @@ impl Asm {
                     let reg1 = parse_reg(operands[0])?;
                     if is_reg(operands[1]) {
                         let reg2 = parse_reg(operands[1])?;
-                        vpush_u32(&mut program_bytes, encode(0x1, 0x5, reg1, reg2, 0));
+                        vpush_u64(&mut program_bytes, encode(0x1, 0x5, reg1, reg2, 0));
                     } else {
                         let val = parse_imm_or_label(operands[1], &labels)?;
-                        vpush_u32(&mut program_bytes, encode(0x2, 0x5, reg1, 0, val as u32));
+                        vpush_u64(&mut program_bytes, encode(0x2, 0x5, reg1, 0, val));
                     }
                 }
                 "jmp" | "jz" | "je" | "jnz" | "jne" => {
@@ -146,7 +147,7 @@ impl Asm {
                     };
 
                     let target = parse_imm_or_label(rest, &labels)?;
-                    vpush_u32(&mut program_bytes, encode(0x3, subop, 0, 0, target as u32));
+                    vpush_u64(&mut program_bytes, encode(0x3, subop, 0, 0, target));
                 }
                 "loadb" | "load" => {
                     let is_byte = instr == "loadb";
@@ -161,11 +162,11 @@ impl Asm {
                     match addr_op {
                         AddrOp::Reg(reg_y) => {
                             let subop = if is_byte { 0x0 } else { 0x4 };
-                            vpush_u32(&mut program_bytes, encode(0x4, subop, reg_x, reg_y, 0));
+                            vpush_u64(&mut program_bytes, encode(0x4, subop, reg_x, reg_y, 0));
                         }
                         AddrOp::Imm(addr) => {
                             let subop = if is_byte { 0x2 } else { 0x6 };
-                            vpush_u32(&mut program_bytes, encode(0x4, subop, reg_x, 0, addr as u32));
+                            vpush_u64(&mut program_bytes, encode(0x4, subop, reg_x, 0, addr));
                         }
                     }
                 }
@@ -182,39 +183,28 @@ impl Asm {
                     match addr_op {
                         AddrOp::Reg(reg_y) => {
                             let subop = if is_byte { 0x1 } else { 0x5 };
-                            vpush_u32(&mut program_bytes, encode(0x4, subop, reg_y, reg_x, 0));
+                            vpush_u64(&mut program_bytes, encode(0x4, subop, reg_y, reg_x, 0));
                         }
                         AddrOp::Imm(addr) => {
                             let subop = if is_byte { 0x3 } else { 0x7 };
-                            vpush_u32(&mut program_bytes, encode(0x4, subop, 0, reg_x, addr as u32));
+                            vpush_u64(&mut program_bytes, encode(0x4, subop, 0, reg_x, addr));
                         }
                     }
                 }
-                // ------------------ Stack Operations ------------------
                 "push" => {
-                    if is_reg(rest) {
-                        let reg = parse_reg(rest)?;
-                        vpush_u32(&mut program_bytes, encode(0x5, 0x0, reg, 0, 0));
-                    } else {
-                        let val = parse_imm_or_label(rest, &labels)?;
-                        vpush_u32(&mut program_bytes, encode(0x5, 0x2, 0, 0, val as u32));
-                    }
+                    let reg = parse_reg(rest)?;
+                    vpush_u64(&mut program_bytes, encode(0x5, 0x0, reg, 0, 0));
                 }
                 "pop" => {
                     let reg = parse_reg(rest)?;
-                    vpush_u32(&mut program_bytes, encode(0x5, 0x1, reg, 0, 0));
+                    vpush_u64(&mut program_bytes, encode(0x5, 0x1, reg, 0, 0));
                 }
                 "call" => {
-                    if is_reg(rest) {
-                        let reg = parse_reg(rest)?;
-                        vpush_u32(&mut program_bytes, encode(0x5, 0x5, reg, 0, 0));
-                    } else {
-                        let target = parse_imm_or_label(rest, &labels)?;
-                        vpush_u32(&mut program_bytes, encode(0x5, 0x3, 0, 0, target as u32));
-                    }
+                    let target = parse_imm_or_label(rest, &labels)?;
+                    vpush_u64(&mut program_bytes, encode(0x5, 0x2, 0, 0, target));
                 }
                 "ret" => {
-                    vpush_u32(&mut program_bytes, encode(0x5, 0x4, 0, 0, 0));
+                    vpush_u64(&mut program_bytes, encode(0x5, 0x3, 0, 0, 0));
                 }
                 _ => return Err(format!("Unknown instruction: '{}'", line)),
             }
@@ -250,15 +240,17 @@ fn split_label(line: &str) -> (Option<&str>, &str) {
     (None, line)
 }
 
-fn encode(group: u32, subop: u32, r1: u32, r2: u32, imm: u32) -> u32 {
-    ((group & 0x0F) << 28)
-        | ((subop & 0x0F) << 24)
-        | ((r1 & 0x0F) << 20)
-        | ((r2 & 0x0F) << 16)
-        | (imm & 0xFFFF)
+// Encode a 64-bit instruction: [group:4][subop:4][r1:4][r2:4][imm:48]
+fn encode(group: u64, subop: u64, r1: u64, r2: u64, imm: u64) -> u64 {
+    ((group & 0x0F) << 60)
+        | ((subop & 0x0F) << 56)
+        | ((r1 & 0x0F) << 52)
+        | ((r2 & 0x0F) << 48)
+        | (imm & 0xFFFF_FFFF_FFFF)
 }
 
-fn vpush_u32(vec: &mut Vec<u8>, val: u32) {
+// Push a 64-bit big-endian instruction into the bytecode buffer
+fn vpush_u64(vec: &mut Vec<u8>, val: u64) {
     vec.extend_from_slice(&val.to_be_bytes());
 }
 
@@ -267,10 +259,10 @@ fn is_reg(s: &str) -> bool {
     (s.starts_with('V') || s.starts_with('v')) && s[1..].parse::<u8>().is_ok()
 }
 
-fn parse_reg(s: &str) -> Result<u32, String> {
+fn parse_reg(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if is_reg(s) {
-        let reg: u32 = s[1..].parse().map_err(|_| "Invalid register number")?;
+        let reg: u64 = s[1..].parse().map_err(|_| "Invalid register number")?;
         if reg >= 16 {
             return Err("Register index out of range (0-15)".to_string());
         }
@@ -280,20 +272,26 @@ fn parse_reg(s: &str) -> Result<u32, String> {
     }
 }
 
-fn parse_imm_or_label(s: &str, labels: &HashMap<String, u16>) -> Result<u16, String> {
+fn parse_imm_or_label(s: &str, labels: &HashMap<String, u64>) -> Result<u64, String> {
     let s = s.trim();
-    if let Some(&addr) = labels.get(s) {
-        Ok(addr)
-    } else if let Ok(val) = s.parse::<u16>() {
-        Ok(val)
+    let val = if let Some(&addr) = labels.get(s) {
+        addr
+    } else if let Ok(val) = s.parse::<u64>() {
+        val
     } else if s.starts_with("0x") || s.starts_with("0X") {
-        u16::from_str_radix(&s[2..], 16).map_err(|_| format!("Invalid hex: '{}'", s))
+        u64::from_str_radix(&s[2..], 16).map_err(|_| format!("Invalid hex: '{}'", s))?
     } else {
-        Err(format!("Invalid immediate value or unknown label: '{}'", s))
+        return Err(format!("Invalid immediate value or unknown label: '{}'", s));
+    };
+
+    // Validate that the immediate fits in the 48-bit instruction field
+    if val > 0xFFFF_FFFF_FFFF {
+        return Err(format!("Immediate value exceeds 48-bit limit: '{}'", s));
     }
+    Ok(val)
 }
 
-fn parse_addr_op(s: &str, labels: &HashMap<String, u16>) -> Result<AddrOp, String> {
+fn parse_addr_op(s: &str, labels: &HashMap<String, u64>) -> Result<AddrOp, String> {
     let clean = s.trim().trim_start_matches('[').trim_end_matches(']').trim();
     if is_reg(clean) {
         let reg = parse_reg(clean)?;
